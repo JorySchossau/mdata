@@ -1,10 +1,51 @@
-if __name__ == '__main__':
-    get_ipython().run_line_magic('pylab', 'inline')
 
-import glob, os, pandas, pickle, fnmatch, numpy, scipy.stats, math
-from itertools import compress
+# coding: utf-8
+
+# In[1]:
+
+
+if __name__ == '__main__':
+    get_ipython().magic('pylab inline')
+
+
+# In[46]:
+
+
+import glob, os, pandas, pickle, fnmatch, numpy
 import zipfile, zlib ## for compression/uncompression
 from enum import Enum
+
+def CITuple(data):
+    ## WARNING: for 1 datum on an x-axis only (calcs the CI for one x-point)
+    ## Bootstrapping 95% confidence intervals
+    ## 100 samples are taken, each one is a "sample with replacement"
+    ## of the original data, as points are there are originally in the data,
+    ## and calculates a mean. So 100 means yields a distribution, and we take the
+    ## tails of that distribution to specify the 95% CI interval.
+    Nsamples=100
+    means = numpy.zeros(Nsamples)
+    for i in range(Nsamples):
+        means[i] = mean(numpy.random.choice(data,size=len(data),replace=True))
+    means = sort(means)
+    lowerCIM = means[int(0.0455*Nsamples)]
+    upperCIM = means[int(0.9545*Nsamples)]
+    return([lowerCIM,upperCIM])
+
+def CIError(data):
+    ## WARNING: for 1 datum on an x-axis only (calcs the CI for one x-point)
+    ## Bootstrapping 95% confidence intervals
+    ## 100 samples are taken, each one is a "sample with replacement"
+    ## of the original data, as points are there are originally in the data,
+    ## and calculates a mean. So 100 means yields a distribution, and we take the
+    ## tails of that distribution to specify the 95% CI interval.
+    Nsamples=100
+    sample = numpy.random.choice(data,size=Nsamples,replace=True)
+    sample_mean = sample.mean()
+    t_critical = scipy.stats.t.ppf(q = 0.975, df=Nsamples-1)
+    sample_stdev = sample.std()
+    sigma = sample_stdev/math.sqrt(Nsamples)
+    conf_error = t_critical * sigma
+    return conf_error
 
 class CSV(Enum):
     LOD=0
@@ -100,20 +141,25 @@ def columns(path='',condition='',file=''):
 def listColumns(path='',condition='',file=''):
     print('\n'.join(list(columns(path,condition,file))))
 
-def cacheCsvOfCondition(condition,file,path='',columns=None,skiprows=None):
+def cacheCsvOfCondition(condition,file,path='',columns=None,skiprows=None,zeroColumns=None):
     '''path: path to dir containing all conditions
     condition: condition name to cache
     creates hidden cache files of conglomerate data for later use'''
     csvFileList = list(csvFiles(path))
     masterDataByCsv = {}
+    print('caching '+condition+'[',end='')
     for eachRep in next(os.walk(os.path.join(path,condition)))[1]:
         tempfile = pandas.read_csv(os.path.join(path,condition,str(eachRep),file),nrows=1)
         data = pandas.read_csv(os.path.join(path,condition,str(eachRep),file),usecols=columns,skiprows=skiprows)
         data['repID'] = int(eachRep) ## set new column of repid
         data['conditionID'] = condition
         data=data.rename(columns = {'score_AVE':'score'})
+        for eachZeroCol in zeroColumns: ## cols that don't exist in this condition
+            data[eachZeroCol] = 0
         if file not in masterDataByCsv: masterDataByCsv[file] = [data]
         else: masterDataByCsv[file].append(data)
+        print('.',end='')
+    print('] saving...')
     for eachCsvFilename,eachData in masterDataByCsv.items():
         pickle.dump(pandas.concat(eachData),open(os.path.join(path,condition,'.'+eachCsvFilename),'wb'))
 
@@ -123,50 +169,13 @@ def cacheCsvsOfAllConditions(path=''): ##TODO FIX THIS add params to cacheCsvOfC
         cacheCsvOfCondition(eachCondition)
         print('done')
 
-def CITuple(data):
-    ## WARNING: for 1 datum on an x-axis only (calcs the CI for one x-point)
-    ## Bootstrapping 95% confidence intervals
-    ## 100 samples are taken, each one is a "sample with replacement"
-    ## of the original data, as points are there are originally in the data,
-    ## and calculates a mean. So 100 means yields a distribution, and we take the
-    ## tails of that distribution to specify the 95% CI interval.
-    Nsamples=100
-    means = numpy.zeros(Nsamples)
-    for i in range(Nsamples):
-        means[i] = mean(numpy.random.choice(data,size=len(data),replace=True))
-    means = sort(means)
-    lowerCIM = means[int(0.0455*Nsamples)]
-    upperCIM = means[int(0.9545*Nsamples)]
-    return([lowerCIM,upperCIM])
-
-def CIError(data):
-    ## WARNING: for 1 datum on an x-axis only (calcs the CI for one x-point)
-    ## Bootstrapping 95% confidence intervals
-    ## 100 samples are taken, each one is a "sample with replacement"
-    ## of the original data, as points are there are originally in the data,
-    ## and calculates a mean. So 100 means yields a distribution, and we take the
-    ## tails of that distribution to specify the 95% CI interval.
-    Nsamples=100
-    sample = numpy.random.choice(data,size=Nsamples,replace=True)
-    sample_mean = sample.mean()
-    t_critical = scipy.stats.t.ppf(q = 0.975, df=Nsamples-1)
-    sample_stdev = sample.std()
-    sigma = sample_stdev/math.sqrt(Nsamples)
-    conf_error = t_critical * sigma
-    return conf_error
-
 class Data(object):
     def __init__(self, data):
         self._data = data
     def subsetByCondition(self,substr):
-        return Data(self._data[self._data['conditionID'].str.contains(substr)])
+        return mview(self._data[self._data['conditionID'].str.contains(substr)])
     def showEvolutionOf(self,column):
-        pt = self._data.pivot_table(values=column, index='update', columns='conditionID', aggfunc=[numpy.mean,CIError])
-        for eachCondition in list(compress(pt['mean'].columns.values,[True,True,True])):
-            fill_between(pt['mean'][eachCondition].index,pt['mean'][eachCondition]-pt['CIError'][eachCondition],pt['mean'][eachCondition]+pt['CIError'][eachCondition],alpha=0.3)
-            plot(pt['mean'][eachCondition])
-    def showEvolvedOf(self,column):
-        pass##pt = self._data.iloc[0].pivot_table()
+        self._data.pivot_table(values=column, index='update', columns='conditionID', aggfunc=[numpy.mean]).plot()
 class Loader(object):
     def __init__(self, path=''):
         self._path = ''
@@ -198,19 +207,25 @@ class Loader(object):
         if self._conditions is None: self._conditions = list(conditions(self._path))
         if self._file is None: raise TypeError('Please specify a csv file')
         for eachCondition in self._conditions:
+            fileCols = list(columns(self._path,eachCondition,self._file))
+            filterCols = set(list(self._columns)[:])
+            zeroCols = []
+            if filterCols is not None: ## This section fixes AVE types: ex: 'score' if only 'score_AVE' is available
+                tempFilterCols = list(filterCols)
+                for eachColumn in tempFilterCols:
+                    if eachColumn not in fileCols:
+                        #if eachColumn+'_AVE' not in fileCols:
+                        #    raise ValueError('neither '+eachColumn+' nor '+eachColumn+'_AVE'+' appears in '+eachCondition+self._file)
+                        #else:
+                        if eachColumn+'_AVE' not in fileCols:
+                            filterCols.remove(eachColumn)
+                            zeroCols.append(eachColumn)
+                        else:
+                            filterCols.remove(eachColumn)
+                            filterCols.add(eachColumn+'_AVE')
             cacheFilePath = os.path.join(self._path,eachCondition,'.'+self._file)
             if not os.path.exists(cacheFilePath) or recache: ## cache if not already cached
-                fileCols = list(columns(self._path,eachCondition,self._file))
-                filterCols = set(list(self._columns)[:])
-                if filterCols is not None: ## This section fixes 'score' if only 'score_AVE' is available, for example.
-                    for eachColumn in filterCols:
-                        if eachColumn not in fileCols:
-                            if eachColumn+'_AVE' not in fileCols:
-                                raise ValueError('neither '+eachColumn+' nor '+eachColumn+'_AVE'+' appears in '+eachCondition+self._file)
-                            else:
-                                filterCols.remove(eachColumn)
-                                filterCols.add(eachColumn+'_AVE')
-                cacheCsvOfCondition(eachCondition,self._file,path=self._path,columns=filterCols,skiprows=self._skiprows)
+                cacheCsvOfCondition(eachCondition,self._file,path=self._path,columns=filterCols,skiprows=self._skiprows,zeroColumns=zeroCols)
         allDataFrames = [pickle.load(open(os.path.join(self._path,eachCondition,'.'+self._file),'rb')) for eachCondition in self._conditions]
         self._data = pandas.concat(allDataFrames)
         return self
@@ -228,19 +243,13 @@ class Loader(object):
         finally:
             zf.close()
 
+
+# In[ ]:
+
+
 if __name__ == '__main__':
     data = Loader().useFile(CSV.POP).getCondition('*DWP_1*').getColumn('update').getColumn('score').sampleEvery(100).load(recache=True).data()
 
-if __name__ == '__main__':
-    data = Loader().useFile(CSV.LOD).getColumn('score').load(recache=True).data()
-    print(data._data.head())
-
-if __name__ == '__main__':
-    d = data.subsetByCondition('PathAssociation')._data
-    MRCA = d['update'].unique()[-10]
-    d = d[d['update'] == MRCA]
-    pt = d.pivot_table(values='score_AVE', index='update', columns='conditionID', aggfunc=[numpy.mean,CIError])
-    pt['mean'].plot(kind='bar')
 
 ## Uses CIError
 if __name__ == '__main__':
@@ -255,9 +264,6 @@ if __name__ == '__main__':
     ylim(bottom=1000)
 
 
-# In[125]:
-
-
 ## Uses CITuple
 if __name__ == '__main__':
     data = Loader().useFile(CSV.LOD).getColumn('update').getColumn('score').load().data()
@@ -268,33 +274,7 @@ if __name__ == '__main__':
         plot(pt['mean'][eachCondition])
 
 
-# In[136]:
-
-
 if __name__ == '__main__':
-    
-    #for eachCondition in pt['mean'].columns.values[:
-    #    fill_between(pt['mean'][eachCondition].index,[e[0] for e in pt['CIError'][eachCondition]],[e[1] for e in pt['CIError'][eachCondition]],alpha=0.3)
-    #    plot(pt['mean'][eachCondition])
-    ylim(bottom=3180,top=3225)
-    #legend(['DEF','DWD','DWP'])
-
-
-# In[91]:
-
-
-if __name__ == '__main__':
-    print(pt.columns.values)
-    fill_between(pt['mean']['C03__DEF_1__DWD_0__DWP_0__WORLD_PathAssociation/'].index,pt['mean']['C03__DEF_1__DWD_0__DWP_0__WORLD_PathAssociation/'])
-    #plot(pt['mean']['C03__DEF_1__DWD_0__DWP_0__WORLD_PathAssociation/'].index,pt['mean']['C03__DEF_1__DWD_0__DWP_0__WORLD_PathAssociation/'])
-
-
-# In[69]:
-
-
-if __name__ == '__main__':
-    data = Loader().useFile(CSV.LOD).getColumn('update').getColumn('score').load().data()
-    for eachCondition in ['Memory','Berry','EdlundMaze','PathAssociation','ValueJudgment']:
-        data.subsetByCondition(eachCondition).showEvolutionOf('score_AVE')
-        legend(['DEF','DWD','DWP'])
+    data.showEvolutionOf('score_AVE')
+    legend(['Memory','Berry','EdlundMaze','PasthAssociation'])
 
