@@ -1,17 +1,7 @@
-
-# coding: utf-8
-
-# In[1]:
-
-
 if __name__ == '__main__':
     get_ipython().magic('pylab inline')
 
-
-# In[46]:
-
-
-import glob, os, pandas, pickle, fnmatch, numpy
+import glob, os, pandas, pickle, fnmatch, numpy, matplotlib.pyplot as plt
 import zipfile, zlib ## for compression/uncompression
 from enum import Enum
 
@@ -25,8 +15,8 @@ def CITuple(data):
     Nsamples=100
     means = numpy.zeros(Nsamples)
     for i in range(Nsamples):
-        means[i] = mean(numpy.random.choice(data,size=len(data),replace=True))
-    means = sort(means)
+        means[i] = numpy.mean(numpy.random.choice(data,size=len(data),replace=True))
+    means = numpy.sort(means)
     lowerCIM = means[int(0.0455*Nsamples)]
     upperCIM = means[int(0.9545*Nsamples)]
     return([lowerCIM,upperCIM])
@@ -92,11 +82,10 @@ def listReplicates(path=''):
     '''path: path to dir containing all conditions
     prints: superset of all replicates across all conditions'''
     print(list(replicates()))
-
 def missingReplicates(path=''):
     '''path: path to dir containing all conditions
     yields: conditionNameWithMissing, repsMissing'''
-    superset, repSetsByCondition = __getReplicateSetsByCondition(path)
+    superset, repSetsByCondition = __getSupersetAndReplicateSetsByCondition(path)
     missingRepSetsByCondition = {}
     for eachCondition, eachRepSet in repSetsByCondition.items():
         missingRepSetsByCondition[eachCondition] = superset-eachRepSet
@@ -133,13 +122,35 @@ def columns(path='',condition='',file=''):
     if len(file) == 0: raise ValueError('file argument necessary')
     if len(condition) == 0: raise ValueError('condition argument necessary')
     firstRep = str(list(replicates(path))[0])
-    csvFilePath = os.path.join(path,condition,firstRep,file)
-    firstRow = pandas.read_csv(csvFilePath,nrows=1)
-    colnames = firstRow.columns.values
+    fullpathFile = os.path.join(path,condition,firstRep,file)
+    fullpathCacheOfFile = os.path.join(path,condition,'.'+file)
+    if os.path.exists(fullpathFile):
+        csvFilePath = os.path.join(path,condition,firstRep,file)
+        firstRow = pandas.read_csv(csvFilePath,nrows=1)
+        colnames = firstRow.columns.values ## final important variable
+    elif os.path.exists(fullpathCacheOfFile):
+        cachedata = pickle.load(open(fullpathCacheOfFile,'rb'))
+        colnames = list(cachedata.columns) ## final important variable
+    if not os.path.exists(fullpathFile) and not os.path.exists(fullpathCacheOfFile):
+        raise ValueError('csv file {} doesn\'t exist and there\'s no cache.'.format(file))
     for eachName in colnames:
         yield eachName
 def listColumns(path='',condition='',file=''):
     print('\n'.join(list(columns(path,condition,file))))
+
+def __getSupersetAndColumnSetsByCondition(path='',file=''):
+    '''path: path to dir containing all conditions
+    returns: (superset, dict[condition,set])
+    where superset is union of all column names across all conditions
+    where dict is set of column names indexed by condition name'''
+    colSetsByCondition=dict()
+    for eachCondition in conditions(path):
+        subdirs = next(os.walk(eachCondition))[1]
+        colSetsByCondition[eachCondition] = set(columns(path,eachCondition,file))
+    superset = set()
+    for eachCondition,eachSet in colSetsByCondition.items():
+        superset |= eachSet
+    return superset, colSetsByCondition
 
 def cacheCsvOfCondition(condition,file,path='',columns=None,skiprows=None,zeroColumns=None):
     '''path: path to dir containing all conditions
@@ -148,9 +159,13 @@ def cacheCsvOfCondition(condition,file,path='',columns=None,skiprows=None,zeroCo
     csvFileList = list(csvFiles(path))
     masterDataByCsv = {}
     print('caching '+condition+'[',end='')
+    if skiprows is None:
+        rowskiplambda = (lambda x: True)
+    else:
+        rowskiplambda = (lambda x: ((x%skiprows)!=0))
     for eachRep in next(os.walk(os.path.join(path,condition)))[1]:
         tempfile = pandas.read_csv(os.path.join(path,condition,str(eachRep),file),nrows=1)
-        data = pandas.read_csv(os.path.join(path,condition,str(eachRep),file),usecols=columns,skiprows=skiprows)
+        data = pandas.read_csv(os.path.join(path,condition,str(eachRep),file),usecols=columns,skiprows=rowskiplambda)
         data['repID'] = int(eachRep) ## set new column of repid
         data['conditionID'] = condition
         data=data.rename(columns = {'score_AVE':'score'})
@@ -159,9 +174,9 @@ def cacheCsvOfCondition(condition,file,path='',columns=None,skiprows=None,zeroCo
         if file not in masterDataByCsv: masterDataByCsv[file] = [data]
         else: masterDataByCsv[file].append(data)
         print('.',end='')
-    print('] saving...')
+    print(']')
     for eachCsvFilename,eachData in masterDataByCsv.items():
-        pickle.dump(pandas.concat(eachData),open(os.path.join(path,condition,'.'+eachCsvFilename),'wb'))
+        pickle.dump(pandas.concat(eachData,sort=True),open(os.path.join(path,condition,'.'+eachCsvFilename),'wb'))
 
 def cacheCsvsOfAllConditions(path=''): ##TODO FIX THIS add params to cacheCsvOfCondition call
     for eachCondition in conditions(path):
@@ -172,10 +187,17 @@ def cacheCsvsOfAllConditions(path=''): ##TODO FIX THIS add params to cacheCsvOfC
 class Data(object):
     def __init__(self, data):
         self._data = data
+    @property
+    def dataframe(self):
+        return self._data
     def subsetByCondition(self,substr):
-        return mview(self._data[self._data['conditionID'].str.contains(substr)])
+        return Data(self._data[self._data['conditionID'].str.contains(substr)])
     def showEvolutionOf(self,column):
         self._data.pivot_table(values=column, index='update', columns='conditionID', aggfunc=[numpy.mean]).plot()
+        plt.title('evolution of {}'.title().format(column),size=18)
+        plt.xlabel('Generations')
+        plt.ylabel(column)
+        
 class Loader(object):
     def __init__(self, path=''):
         self._path = ''
@@ -184,51 +206,94 @@ class Loader(object):
         self._data = None
         self._columns = None
         self._skiprows = None
+        self._useFileAlreadyCalled = False
     def useFile(self, file): ## singular
+        if self._useFileAlreadyCalled:
+            raise ValueError('attempting to call useFile twice. Use new Loader() instance for a new file.')
         if not isinstance(file, CSV) and not isinstance(file,str):
             raise TypeError('file must be an instance of CSV Enum or a string (full filename of csv file)')
         if isinstance(file, CSV): file = _convertCSVEnumToStringFilename(file)
         if self._file is not None: raise TypeError('Do not define multiple csv files to load from in one invocation')
         self._file = file
+        self._useFileAlreadyCalled = True
         return self
     def getCondition(self,pattern): ## can chain multiples of this
         if self._conditions is None: self._conditions = []
-        for eachCondition in conditions():
-            if fnmatch.fnmatch(eachCondition,pattern): self._conditions.append(eachCondition)
+        self._conditions.append(pattern)
         return self
-    def getColumn(self,name):
+    def getColumn(self,pattern):
         if self._columns is None: self._columns = set() ##set(['update']) ##default columns here
-        self._columns.add(name)
+        self._columns.add(pattern)
         return self
     def sampleEvery(self,N):
-        self._skiprows = (lambda x: ((x%N)!=0)) ## mask for which rows to skip (True = skip)
+        self._skiprows = N ## mask for which rows to skip (True = skip)
         return self
     def load(self,recache=False):
         if self._conditions is None: self._conditions = list(conditions(self._path))
         if self._file is None: raise TypeError('Please specify a csv file')
-        for eachCondition in self._conditions:
-            fileCols = list(columns(self._path,eachCondition,self._file))
-            filterCols = set(list(self._columns)[:])
-            zeroCols = []
-            if filterCols is not None: ## This section fixes AVE types: ex: 'score' if only 'score_AVE' is available
-                tempFilterCols = list(filterCols)
-                for eachColumn in tempFilterCols:
-                    if eachColumn not in fileCols:
-                        #if eachColumn+'_AVE' not in fileCols:
-                        #    raise ValueError('neither '+eachColumn+' nor '+eachColumn+'_AVE'+' appears in '+eachCondition+self._file)
-                        #else:
-                        if eachColumn+'_AVE' not in fileCols:
-                            filterCols.remove(eachColumn)
-                            zeroCols.append(eachColumn)
-                        else:
-                            filterCols.remove(eachColumn)
-                            filterCols.add(eachColumn+'_AVE')
-            cacheFilePath = os.path.join(self._path,eachCondition,'.'+self._file)
-            if not os.path.exists(cacheFilePath) or recache: ## cache if not already cached
-                cacheCsvOfCondition(eachCondition,self._file,path=self._path,columns=filterCols,skiprows=self._skiprows,zeroColumns=zeroCols)
-        allDataFrames = [pickle.load(open(os.path.join(self._path,eachCondition,'.'+self._file),'rb')) for eachCondition in self._conditions]
-        self._data = pandas.concat(allDataFrames)
+        ## Step 1) Expand patterns of conditions and column names into fully qualified versions
+        expandedConditions = []
+        expandedColumns = []
+        expandedColumnsSet = set()
+        ## expand conditions from patterns
+        for eachConditionPattern in self._conditions:
+            for eachCondition in conditions(self._path):
+                if fnmatch.fnmatch(eachCondition,eachConditionPattern): expandedConditions.append(eachCondition)
+        if len(expandedConditions) == 0: raise ValueError('Error: no conditions matched')
+        ## expand column names from patterns
+        if not self._columns is None: ## if user didn't ask for all columns by specifying none
+            for eachCondition in expandedConditions:
+                for eachColumnPattern in self._columns:
+                    for eachColumn in columns(self._path,eachCondition,self._file):
+                        eachColumn = eachColumn.strip('_AVE')
+                        if fnmatch.fnmatch(eachColumn,eachColumnPattern): expandedColumnsSet.add(eachColumn)
+            if len(expandedColumnsSet) == 0: raise ValueError('Error: no columns matched. Check your getColumns() use.')
+            expandedColumns = list(expandedColumnsSet)
+        ## Step 2) Check conditions and caches to see if cache files can satisfy the query demand
+        cacheCanSatisfy = True
+        if not recache:
+            for eachCondition in expandedConditions:
+                if not cacheCanSatisfy: break
+                cacheFilePath = os.path.join(self._path,eachCondition,'.'+self._file)
+                if not os.path.exists(cacheFilePath): cacheCanSatisfy = False
+                else: ## cache can at least satisfy this one condition
+                    columnNamesInCache = list(pickle.load(open(cacheFilePath,'rb')).columns)
+                    if len(expandedColumns) != 0: ## if user didn't ask for all columns by specifying none
+                        for eachColumn in expandedColumns:
+                            if eachColumn not in columnNamesInCache: cacheCanSatisfy = False
+                            if not cacheCanSatisfy: break
+                    if not cacheCanSatisfy:
+                        raise ValueError("Error: There's a cached version, but it doesn't have what you asked for. You should force a recache 'load(recache=True)'")
+        ## Step 3) for each condition, find columns, load desired columns only, and use data in name_AVE if name not exists.
+        ## but use cache if it can satisfy user request for data
+        if not cacheCanSatisfy or recache:
+            print('loading from original files')
+            for eachCondition in expandedConditions:
+                fileCols = list(columns(self._path,eachCondition,self._file))
+                filterCols = set(list(expandedColumns)[:]) ## copy ([:]), and cast copy to set
+                zeroCols = []
+                if filterCols is not None: ## This section fixes AVE types: ex: 'score' if only 'score_AVE' is available
+                    tempFilterCols = list(filterCols)
+                    for eachColumn in tempFilterCols:
+                        if eachColumn not in fileCols:
+                            if eachColumn+'_AVE' not in fileCols:
+                                filterCols.remove(eachColumn)
+                                zeroCols.append(eachColumn)
+                            else:
+                                filterCols.remove(eachColumn)
+                                filterCols.add(eachColumn+'_AVE')
+                cacheFilePath = os.path.join(self._path,eachCondition,'.'+self._file)
+                if not os.path.exists(cacheFilePath) or recache: ## cache if not already cached
+                    cacheCsvOfCondition(eachCondition, self._file, path=self._path, columns=filterCols, skiprows=self._skiprows, zeroColumns=zeroCols)
+        else:
+            print('loading from cache')
+        ## Step 4) load from the cache that must now exist one way or another
+        allDataFrames = [pickle.load(open(os.path.join(self._path,eachCondition,'.'+self._file),'rb')) for eachCondition in expandedConditions]
+        self._data = pandas.concat(allDataFrames,sort=True)
+        if cacheCanSatisfy and self._skiprows != None:
+            self._data = self._data[self._data['update'] % self._skiprows == 0]
         return self
+    @property
     def data(self):
         return Data(self._data)
     def compress(self,filename):
@@ -243,13 +308,8 @@ class Loader(object):
         finally:
             zf.close()
 
-
-# In[ ]:
-
-
 if __name__ == '__main__':
     data = Loader().useFile(CSV.POP).getCondition('*DWP_1*').getColumn('update').getColumn('score').sampleEvery(100).load(recache=True).data()
-
 
 ## Uses CIError
 if __name__ == '__main__':
@@ -263,7 +323,6 @@ if __name__ == '__main__':
     gca().set_xscale('log')
     ylim(bottom=1000)
 
-
 ## Uses CITuple
 if __name__ == '__main__':
     data = Loader().useFile(CSV.LOD).getColumn('update').getColumn('score').load().data()
@@ -273,8 +332,6 @@ if __name__ == '__main__':
         fill_between(pt['mean'][eachCondition].index,[e[0] for e in pt['CITuple'][eachCondition]],[e[1] for e in pt['CIError'][eachCondition]],alpha=0.3)
         plot(pt['mean'][eachCondition])
 
-
 if __name__ == '__main__':
     data.showEvolutionOf('score_AVE')
     legend(['Memory','Berry','EdlundMaze','PasthAssociation'])
-
