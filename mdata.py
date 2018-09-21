@@ -111,7 +111,7 @@ def csvFiles(path=''):
                     names.add(eachFile)
     for eachName in names:
         yield eachName
-def listCsvFiles(path=''):
+def listCSVFiles(path=''):
     '''path: path to dir containing all conditions
     prints: filenames of all unique csv files found among all conditions and replicates'''
     for name in csvFiles():
@@ -160,7 +160,7 @@ def cacheCsvOfCondition(condition,file,path='',columns=None,skiprows=None,zeroCo
     masterDataByCsv = {}
     print('caching '+condition+'[',end='')
     if skiprows is None:
-        rowskiplambda = (lambda x: True)
+        rowskiplambda = (lambda x: False)
     else:
         rowskiplambda = (lambda x: ((x%skiprows)!=0))
     for eachRep in next(os.walk(os.path.join(path,condition)))[1]:
