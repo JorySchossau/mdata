@@ -1,7 +1,7 @@
 if __name__ == '__main__':
     get_ipython().magic('pylab inline')
 
-import glob, os, pandas, pickle, fnmatch, numpy, matplotlib.pyplot as plt
+import glob, os, pandas, pickle, fnmatch, numpy, matplotlib.pyplot as plt, sys
 import zipfile, zlib ## for compression/uncompression
 from enum import Enum
 
@@ -159,6 +159,7 @@ def cacheCsvOfCondition(condition,file,path='',columns=None,skiprows=None,zeroCo
     csvFileList = list(csvFiles(path))
     masterDataByCsv = {}
     print('caching '+condition+'[',end='')
+    sys.stdout.flush()
     if skiprows is None:
         rowskiplambda = (lambda x: False)
     else:
@@ -174,7 +175,9 @@ def cacheCsvOfCondition(condition,file,path='',columns=None,skiprows=None,zeroCo
         if file not in masterDataByCsv: masterDataByCsv[file] = [data]
         else: masterDataByCsv[file].append(data)
         print('.',end='')
+        sys.stdout.flush()
     print(']')
+    sys.stdout.flush()
     for eachCsvFilename,eachData in masterDataByCsv.items():
         pickle.dump(pandas.concat(eachData,sort=True),open(os.path.join(path,condition,'.'+eachCsvFilename),'wb'))
 
