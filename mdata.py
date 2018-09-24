@@ -190,6 +190,11 @@ class Data(object):
     @property
     def dataframe(self):
         return self._data
+    def listConditions(self):
+        rawConditions = self._data.conditionID.unique()
+        worldlessConditions = [e.substr(0,e.find('_WORLD')) for e in rawConditions]
+        for eachCondition in list(set(worldlessConditions)):
+            print(eachCondition)
     def subsetByCondition(self,substr):
         return Data(self._data[self._data['conditionID'].str.contains(substr)])
     def showEvolutionOf(self,column):
